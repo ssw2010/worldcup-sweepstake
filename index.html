@@ -1657,10 +1657,11 @@ const SCHEDULE = [
 ];
 
 // ═══════════════════════════════════════════════
-// KNOWN RESULTS  (from search data, June 11–17)
+// LIVE RESULTS  — fetched from public API, cached 5 min
 // ═══════════════════════════════════════════════
-const KNOWN_RESULTS = {
-  // Key: "home|away" → {hg, ag}
+
+// Fallback hardcoded results (Matchday 1, June 11–17) used when API is unavailable
+const FALLBACK_RESULTS = {
   'Mexico|South Africa':         {hg:2,ag:0},
   'South Korea|Czech Republic':  {hg:2,ag:1},
   'Canada|Bosnia':               {hg:1,ag:1},
@@ -1670,7 +1671,7 @@ const KNOWN_RESULTS = {
   'United States|Paraguay':      {hg:4,ag:1},
   'Australia|Turkey':            {hg:2,ag:0},
   'Germany|Curaçao':             {hg:7,ag:1},
-  'Côte d\'Ivoire|Ecuador':      {hg:1,ag:0},
+  "Côte d'Ivoire|Ecuador":       {hg:1,ag:0},
   'Sweden|Tunisia':              {hg:5,ag:1},
   'Netherlands|Japan':           {hg:2,ag:2},
   'Spain|Cabo Verde':            {hg:0,ag:0},
@@ -1687,28 +1688,106 @@ const KNOWN_RESULTS = {
   'Uzbekistan|Colombia':         {hg:1,ag:3},
 };
 
+// Map app team names → openfootball.json team name variants for matching
+const API_NAME_MAP = {
+  'Czech Republic': ['Czechia','Czech Republic'],
+  'United States':  ['USA','United States','US'],
+  'Turkey':         ['Türkiye','Turkey','Turkiye'],
+  "Côte d'Ivoire":  ["Côte d'Ivoire","Ivory Coast","Cote d'Ivoire"],
+  'Curaçao':        ['Curaçao','Curacao'],
+  'Cabo Verde':     ['Cabo Verde','Cape Verde'],
+  'DR Congo':       ['DR Congo','Congo DR','Democratic Republic of the Congo'],
+  'Bosnia':         ['Bosnia and Herzegovina','Bosnia & Herzegovina','Bosnia'],
+};
+
+function normaliseTeamName(name) {
+  for (const [canonical, variants] of Object.entries(API_NAME_MAP)) {
+    if (variants.includes(name)) return canonical;
+  }
+  return name;
+}
+
+// Cache: {results: {...}, fetchedAt: timestamp}
+let liveResultsCache = null;
+
+async function fetchLiveResults() {
+  // Return cache if fresh (5 min)
+  if (liveResultsCache && Date.now() - liveResultsCache.fetchedAt < 5 * 60 * 1000) {
+    return liveResultsCache.results;
+  }
+
+  try {
+    // openfootball/worldcup.json — free, public-domain, CORS-enabled, no key required
+    // Updated roughly daily by the maintainer as results are confirmed
+    const resp = await fetch('https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json');
+    if (!resp.ok) throw new Error(`fetch failed: ${resp.status}`);
+    const data = await resp.json();
+
+    const results = {...FALLBACK_RESULTS};
+    (data.matches || []).forEach(m => {
+      if (!m.score?.ft) return; // not played yet
+      const home = normaliseTeamName(m.team1 || '');
+      const away = normaliseTeamName(m.team2 || '');
+      const [hg, ag] = m.score.ft;
+      if (home && away && hg != null && ag != null) {
+        results[`${home}|${away}`] = {hg, ag};
+      }
+    });
+
+    liveResultsCache = {results, fetchedAt: Date.now()};
+    return results;
+  } catch(e) {
+    // Fall back to hardcoded Matchday-1 results on any error (offline, source down, etc.)
+    liveResultsCache = {results: FALLBACK_RESULTS, fetchedAt: Date.now()};
+    return FALLBACK_RESULTS;
+  }
+}
+
+// Synchronous lookup used by modal — reads from cache (populated on modal open)
+let _currentResults = FALLBACK_RESULTS;
+
 function getKnownResult(home, away) {
-  return KNOWN_RESULTS[`${home}|${away}`] || null;
+  return _currentResults[`${home}|${away}`] || null;
 }
 
 // ═══════════════════════════════════════════════
 // MODAL
 // ═══════════════════════════════════════════════
-function openTeamModal(team) {
+async function openTeamModal(team) {
+  // Show a loading state immediately
+  const loadingEl = document.createElement('div');
+  loadingEl.id = 'team-modal';
+  loadingEl.className = 'modal-overlay';
+  loadingEl.innerHTML = `<div class="modal" style="display:flex;align-items:center;justify-content:center;min-height:180px">
+    <div style="text-align:center;color:var(--muted)">
+      <div style="font-size:28px;margin-bottom:8px">${FLAGS[team]||'🌍'}</div>
+      <div style="font-size:13px;font-weight:600">Loading results…</div>
+    </div>
+  </div>`;
+  loadingEl.addEventListener('click', e => { if (!e.target.closest('.modal')) closeTeamModal(); });
+  document.body.appendChild(loadingEl);
+  document.body.style.overflow = 'hidden';
+
+  // Fetch live results (uses cache if fresh)
+  _currentResults = await fetchLiveResults();
+
+  // Remove loading, build real modal
+  closeTeamModal();
+
   const grp = Object.entries(GROUPS).find(([,ts]) => ts.includes(team))?.[0] || '';
   const pi  = state.allocated?.[team];
   const ownerName = pi !== undefined ? state.players[pi] : null;
   const ownerColor = pi !== undefined ? PLAYER_DOTS[pi] : '#ccc';
 
   const teamFixtures = SCHEDULE.filter(f => f.home === team || f.away === team);
-  const today = new Date('2026-06-18'); // tournament is live — use current date
+  const today = new Date(); // use real current date
 
   // Separate played vs upcoming
   const played   = [];
   const upcoming = [];
 
   teamFixtures.forEach(f => {
-    const fDate = new Date(f.date);
+    const fDate = new Date(f.date + 'T23:59:00');
     const kr = getKnownResult(f.home, f.away);
     // Also check manually entered results from state
     const stateKey = findStateResultKey(f);
