@@ -1693,8 +1693,12 @@ async function shareTeams(pi) {
 }
 
 async function shareAllTeams() {
-  const sections = Array.from({length: NUM_PLAYERS}, (_, pi) => buildTeamsMessage(pi));
-  const text = `🏆 2026 World Cup Sweepstake — Full Draw 🏆\n\n${sections.map(s => s.split('\n\n')[1]).join('\n\n')}\n\nGood luck everyone! ⚽`;
+  const sections = Array.from({length: NUM_PLAYERS}, (_, pi) => {
+    const parts = buildTeamsMessage(pi).split('\n\n');
+    // parts: [0]=trophy header, [1]=greeting, [2]=team list, [3]=footer
+    return `${parts[1]}\n\n${parts[2]}`;
+  });
+  const text = `🏆 2026 World Cup Sweepstake — Full Draw 🏆\n\n${sections.join('\n\n')}\n\nGood luck everyone! ⚽`;
   showSharePicker(text, 'World Cup Sweepstake — Full Draw');
 }
 
