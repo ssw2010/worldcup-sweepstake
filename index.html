@@ -1689,47 +1689,76 @@ function buildTeamsMessage(pi) {
 }
 
 async function shareTeams(pi) {
-  const text = buildTeamsMessage(pi);
-  const title = `${state.players[pi]}'s World Cup Teams`;
-
-  if (navigator.share) {
-    try {
-      await navigator.share({ title, text });
-      return;
-    } catch(e) {
-      if (e.name === 'AbortError') return; // user cancelled, do nothing
-      // fall through to clipboard fallback on other errors
-    }
-  }
-
-  // Fallback: copy to clipboard
-  try {
-    await navigator.clipboard.writeText(text);
-    showToast(`Copied ${state.players[pi]}'s teams to clipboard!`);
-  } catch(e) {
-    // Final fallback: show in a prompt-style alert so it can be manually copied
-    alert(text);
-  }
+  showSharePicker(buildTeamsMessage(pi), `${state.players[pi]}'s World Cup Teams`);
 }
 
 async function shareAllTeams() {
   const sections = Array.from({length: NUM_PLAYERS}, (_, pi) => buildTeamsMessage(pi));
   const text = `🏆 2026 World Cup Sweepstake — Full Draw 🏆\n\n${sections.map(s => s.split('\n\n')[1]).join('\n\n')}\n\nGood luck everyone! ⚽`;
+  showSharePicker(text, 'World Cup Sweepstake — Full Draw');
+}
 
-  if (navigator.share) {
-    try {
-      await navigator.share({ title: 'World Cup Sweepstake — Full Draw', text });
-      return;
-    } catch(e) {
-      if (e.name === 'AbortError') return;
-    }
-  }
+function showSharePicker(text, title) {
+  const hasNativeShare = !!navigator.share;
+  const encoded = encodeURIComponent(text);
 
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'share-picker';
+  overlay.innerHTML = `
+    <div class="modal" style="max-width:380px">
+      <div class="modal-header">
+        <div class="modal-title-block">
+          <div class="modal-team-name" style="font-size:20px">Send Teams</div>
+        </div>
+        <button class="modal-close" onclick="document.getElementById('share-picker').remove(); document.body.style.overflow=''">✕</button>
+      </div>
+      <div class="modal-body" style="display:flex;flex-direction:column;gap:10px">
+        <button class="btn" style="background:#25D366;justify-content:center" onclick="window.open('https://wa.me/?text=${encoded}','_blank'); document.getElementById('share-picker').remove(); document.body.style.overflow=''">
+          💬 Open in WhatsApp
+        </button>
+        <button class="btn" style="background:var(--pitch);justify-content:center" onclick="window.open('sms:?body=${encoded}','_blank'); document.getElementById('share-picker').remove(); document.body.style.overflow=''">
+          📱 Open in Messages (SMS)
+        </button>
+        <button class="btn gold" style="justify-content:center" onclick="copyShareText(this)">
+          📋 Copy text
+        </button>
+        ${hasNativeShare ? `
+        <button class="btn sm" style="justify-content:center;background:rgba(0,0,0,0.06);color:var(--ink)" onclick="nativeShare()">
+          More options…
+        </button>` : ''}
+        <div style="background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--muted);white-space:pre-wrap;max-height:180px;overflow-y:auto;font-family:monospace">${escHtml(text)}</div>
+      </div>
+    </div>
+  `;
+  overlay.addEventListener('click', e => {
+    if (!e.target.closest('.modal')) { overlay.remove(); document.body.style.overflow=''; }
+  });
+  document.body.appendChild(overlay);
+  document.body.style.overflow = 'hidden';
+  window._shareText = text;
+  window._shareTitle = title;
+}
+
+async function copyShareText(btn) {
   try {
-    await navigator.clipboard.writeText(text);
-    showToast('Copied all teams to clipboard!');
+    await navigator.clipboard.writeText(window._shareText);
+    const original = btn.textContent;
+    btn.textContent = '✓ Copied!';
+    setTimeout(() => { btn.textContent = original; }, 1500);
   } catch(e) {
-    alert(text);
+    alert(window._shareText);
+  }
+}
+
+async function nativeShare() {
+  if (!navigator.share) return;
+  try {
+    await navigator.share({ title: window._shareTitle, text: window._shareText });
+    const picker = document.getElementById('share-picker');
+    if (picker) { picker.remove(); document.body.style.overflow=''; }
+  } catch(e) {
+    // user cancelled the native share sheet — leave the picker open
   }
 }
 
