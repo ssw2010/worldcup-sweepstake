@@ -144,11 +144,12 @@
   /* ── ALLOCATION DISPLAY ── */
   .player-panels {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     gap: 16px;
     margin-bottom: 28px;
   }
-  @media(max-width: 600px) { .player-panels { grid-template-columns: 1fr; } }
+  @media(max-width: 800px) { .player-panels { grid-template-columns: repeat(2, 1fr); } }
+  @media(max-width: 500px) { .player-panels { grid-template-columns: 1fr; } }
 
   .player-panel {
     border-radius: var(--radius);
@@ -718,7 +719,7 @@
 
 <header>
   <h1>2026 World Cup <span>Sweepstake</span></h1>
-  <p>48 teams · 12 groups · 4 players · 1 winner</p>
+  <p>48 teams · 12 groups · 3 players · 1 winner</p>
 </header>
 
 <div class="wrap" id="app"></div>
@@ -757,6 +758,7 @@ const FLAGS = {
   'England':'🏴󠁧󠁢󠁥󠁮󠁧󠁿','Croatia':'🇭🇷','Ghana':'🇬🇭','Panama':'🇵🇦'
 };
 
+const NUM_PLAYERS = 3;
 const PLAYER_COLORS = ['p1','p2','p3','p4'];
 const PLAYER_DOTS   = ['#2563eb','#d97706','#7c3aed','#db2777'];
 
@@ -780,7 +782,7 @@ let state = loadState();
 
 function defaultState() {
   return {
-    players: ['Player 1','Player 2','Player 3','Player 4'],
+    players: ['Player 1','Player 2','Player 3'],
     allocated: null,     // {teamName: playerIndex}
     groupResults: {},    // "A-0": {homeGoals, awayGoals}
     koRounds: {},        // {roundName: [{t1,t2,winner,score1,score2}]}
@@ -808,12 +810,19 @@ function loadState() {
 }
 
 function isValidAllocation(allocated) {
-  for (const [g, teams] of Object.entries(GROUPS)) {
-    const owners = teams.map(t => allocated[t]);
-    if (owners.some(o => o === undefined)) return false;
-    if (new Set(owners).size !== 4) return false;
+  // Every team must have an owner (0, 1, or 2)
+  const allTeams = Object.values(GROUPS).flat();
+  for (const team of allTeams) {
+    const o = allocated[team];
+    if (o === undefined || o < 0 || o >= NUM_PLAYERS) return false;
   }
-  return true;
+  // Within each group, no player should hold 2+ of the group's first-round picks.
+  // We can't fully distinguish "first pick" vs "leftover" after the fact, so instead
+  // validate the overall balance: each player ends up with the same total team count.
+  const counts = Array.from({length: NUM_PLAYERS}, (_, pi) =>
+    allTeams.filter(t => allocated[t] === pi).length);
+  const expected = allTeams.length / NUM_PLAYERS;
+  return counts.every(c => c === expected);
 }
 
 function saveState() {
@@ -824,18 +833,36 @@ function saveState() {
 // ALLOCATION
 // ═══════════════════════════════════════════════
 function allocate() {
-  // Each player gets exactly one team from every group (4 teams per group → 4 players)
-  // For each group: shuffle the 4 teams, assign one to each player
+  // Step 1: in each group of 4 teams, deal 3 of them one-per-player (shuffled).
+  // The 4th team in each group is "leftover" — 12 leftovers total across 12 groups.
   const allocated = {};
+  const leftovers = [];
+
   Object.entries(GROUPS).forEach(([g, teams]) => {
     const shuffled = [...teams];
     for (let i = shuffled.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
-    // Player 0 gets shuffled[0], player 1 gets shuffled[1], etc.
-    shuffled.forEach((team, pi) => { allocated[team] = pi; });
+    // First NUM_PLAYERS teams go one-per-player
+    for (let pi = 0; pi < NUM_PLAYERS; pi++) {
+      allocated[shuffled[pi]] = pi;
+    }
+    // Remaining team(s) in this group are leftover
+    for (let i = NUM_PLAYERS; i < shuffled.length; i++) {
+      leftovers.push(shuffled[i]);
+    }
   });
+
+  // Step 2: shuffle the leftovers, then deal them out evenly across players
+  for (let i = leftovers.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [leftovers[i], leftovers[j]] = [leftovers[j], leftovers[i]];
+  }
+  leftovers.forEach((team, idx) => {
+    allocated[team] = idx % NUM_PLAYERS;
+  });
+
   state.allocated = allocated;
   state.groupResults = {};
   state.koRounds = {};
@@ -873,8 +900,8 @@ function getGroupStandings(groupKey) {
 }
 
 function playerTeamCount() {
-  if (!state.allocated) return [0,0,0,0];
-  const alive = [0,0,0,0];
+  if (!state.allocated) return Array(NUM_PLAYERS).fill(0);
+  const alive = Array(NUM_PLAYERS).fill(0);
   Object.entries(state.allocated).forEach(([team,pi]) => {
     if (!state.eliminated[team] && team !== state.champion) alive[pi]++;
   });
@@ -882,8 +909,8 @@ function playerTeamCount() {
 }
 
 function playerWins() {
-  if (!state.allocated) return [0,0,0,0];
-  const wins = [0,0,0,0];
+  if (!state.allocated) return Array(NUM_PLAYERS).fill(0);
+  const wins = Array(NUM_PLAYERS).fill(0);
   // Count teams that won matches (in knockout)
   Object.values(state.koRounds).forEach(matches => {
     matches.forEach(m => {
@@ -929,7 +956,7 @@ function renderSetup(app) {
         <button class="btn gold" id="draw-btn" onclick="startDrawCeremony()">🎲 Draw Teams</button>
       </div>
       <p style="margin-top:14px;font-size:12px;color:var(--muted);">
-        Each player receives one team from every group — 12 teams each, one stake in all 12 groups.
+        Each player gets one team from every group (3 of the 4). The 12 leftover teams are then dealt out evenly — everyone ends up with 16 teams.
       </p>
     </div>
     <div style="color:rgba(255,255,255,0.5);text-align:center;font-size:13px;padding:20px;">
@@ -941,29 +968,45 @@ function renderSetup(app) {
 
 function startDrawCeremony() {
   // Collect player names
-  for (let i=0;i<4;i++) {
+  for (let i=0;i<NUM_PLAYERS;i++) {
     const inp = document.getElementById(`pname${i}`);
     if (inp) state.players[i] = inp.value.trim() || `Player ${i+1}`;
   }
 
-  // Compute the allocation upfront (same logic as allocate())
+  // Compute the allocation upfront: 3-of-4 per group, then deal leftovers evenly
   const allocated = {};
-  const groupDrawOrder = {}; // g -> shuffled teams array
+  const groupDrawOrder = {}; // g -> shuffled teams array (first NUM_PLAYERS are dealt directly)
+  const leftovers = [];
+
   Object.entries(GROUPS).forEach(([g, teams]) => {
     const shuffled = [...teams];
     for (let i = shuffled.length-1; i>0; i--) {
       const j = Math.floor(Math.random()*(i+1));
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
-    shuffled.forEach((team, pi) => { allocated[team] = pi; });
+    for (let pi = 0; pi < NUM_PLAYERS; pi++) {
+      allocated[shuffled[pi]] = pi;
+    }
+    for (let i = NUM_PLAYERS; i < shuffled.length; i++) {
+      leftovers.push(shuffled[i]);
+    }
     groupDrawOrder[g] = shuffled;
   });
 
+  // Shuffle and deal leftovers evenly across players
+  for (let i = leftovers.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [leftovers[i], leftovers[j]] = [leftovers[j], leftovers[i]];
+  }
+  leftovers.forEach((team, idx) => {
+    allocated[team] = idx % NUM_PLAYERS;
+  });
+
   // Show the ceremony overlay
-  showDrawOverlay(groupDrawOrder, allocated);
+  showDrawOverlay(groupDrawOrder, allocated, leftovers);
 }
 
-function showDrawOverlay(groupDrawOrder, allocated) {
+function showDrawOverlay(groupDrawOrder, allocated, leftovers) {
   const overlay = document.createElement('div');
   overlay.id = 'draw-overlay';
   overlay.innerHTML = `
@@ -994,7 +1037,7 @@ function showDrawOverlay(groupDrawOrder, allocated) {
   `;
   document.body.appendChild(overlay);
   document.body.style.overflow = 'hidden';
-  window._drawData = { groupDrawOrder, allocated, cancelled: false };
+  window._drawData = { groupDrawOrder, allocated, leftovers, cancelled: false };
 }
 
 async function runDraw(drawData) {
@@ -1002,12 +1045,12 @@ async function runDraw(drawData) {
   document.getElementById('draw-skip-btn').style.display = 'inline-flex';
 
   const groups = Object.keys(GROUPS);
-  const total = groups.length;
+  const totalSteps = groups.length + 1; // +1 for the leftover round
 
   for (let gi = 0; gi < groups.length; gi++) {
     if (drawData.cancelled) return;
     const g = groups[gi];
-    const teams = drawData.groupDrawOrder[g];
+    const teams = drawData.groupDrawOrder[g].slice(0, NUM_PLAYERS); // only the dealt ones
 
     // Update group label with fanfare
     const label = document.getElementById('draw-group-label');
@@ -1021,18 +1064,43 @@ async function runDraw(drawData) {
 
     // Update progress bar
     const bar = document.getElementById('draw-progress-bar');
-    bar.style.width = `${((gi) / total) * 100}%`;
+    bar.style.width = `${(gi / totalSteps) * 100}%`;
 
-    // Animate each slot's reel
+    // Animate each slot's reel — slow, deliberate pace
     await Promise.all(teams.map((team, pi) =>
-      spinReel(pi, team, gi === 0 ? 600 + pi*120 : 400 + pi*100, drawData)
+      spinReel(pi, team, gi === 0 ? 900 + pi*250 : 600 + pi*250, drawData)
     ));
 
     if (drawData.cancelled) return;
 
-    // Pause between groups
+    // Pause between groups — long enough to read the result
     status.textContent = `Group ${g} drawn! ✓`;
-    await sleep(gi < groups.length-1 ? 700 : 400);
+    await sleep(1400);
+  }
+
+  if (drawData.cancelled) return;
+
+  // Leftover round: the 4th team from each group, dealt out evenly across players
+  const label = document.getElementById('draw-group-label');
+  label.style.animation = 'none';
+  label.offsetHeight;
+  label.style.animation = 'groupPop 0.4s ease';
+  label.innerHTML = `<span class="draw-group-letter" style="color:var(--gold)">LEFTOVER TEAMS</span>`;
+  document.getElementById('draw-status').textContent = 'Sharing out the remaining 12 teams…';
+  document.getElementById('draw-progress-bar').style.width = `${(groups.length / totalSteps) * 100}%`;
+  await sleep(1200);
+
+  const leftovers = drawData.leftovers;
+  for (let li = 0; li < leftovers.length; li += NUM_PLAYERS) {
+    if (drawData.cancelled) return;
+    const batch = leftovers.slice(li, li + NUM_PLAYERS);
+    document.getElementById('draw-status').textContent =
+      `Leftover team ${Math.floor(li/NUM_PLAYERS)+1} of ${Math.ceil(leftovers.length/NUM_PLAYERS)}…`;
+    await Promise.all(batch.map((team, pi) =>
+      spinReel(pi, team, 500 + pi*250, drawData)
+    ));
+    if (drawData.cancelled) return;
+    await sleep(1100);
   }
 
   if (drawData.cancelled) return;
@@ -1044,9 +1112,9 @@ async function runDraw(drawData) {
   document.getElementById('draw-skip-btn').style.display = 'none';
 
   // Brief celebration pause then confetti + finish
-  await sleep(600);
+  await sleep(800);
   launchConfetti();
-  await sleep(1800);
+  await sleep(2200);
   finishDraw(drawData.allocated);
 }
 
@@ -1059,19 +1127,21 @@ function spinReel(pi, finalTeam, delay, drawData) {
       if (!reel) { resolve(); return; }
 
       const allTeams = Object.values(GROUPS).flat();
-      const spinCount = 14 + Math.floor(Math.random()*8);
-      const spinDuration = 80;
+      const spinCount = 26 + Math.floor(Math.random()*10);
+      const spinDuration = 170;
 
-      // Fast spin phase
+      // Fast spin phase — slow, deliberate deceleration
       for (let s = 0; s < spinCount; s++) {
         if (drawData.cancelled) { resolve(); return; }
         const t = allTeams[Math.floor(Math.random()*allTeams.length)];
         reel.innerHTML = `<div class="draw-slot-team spinning">${FLAGS[t]||'🌍'} ${escHtml(t)}</div>`;
-        await sleep(spinDuration - Math.min(s*2, 50)); // accelerate then slow
+        await sleep(spinDuration - Math.min(s*3, 110)); // accelerate then slow much more gradually
       }
 
-      // Slow down for final 3
+      // Slow down for final stretch — several deliberate "near misses"
       const slowTeams = [
+        allTeams[Math.floor(Math.random()*allTeams.length)],
+        allTeams[Math.floor(Math.random()*allTeams.length)],
         allTeams[Math.floor(Math.random()*allTeams.length)],
         allTeams[Math.floor(Math.random()*allTeams.length)],
         finalTeam
@@ -1079,7 +1149,7 @@ function spinReel(pi, finalTeam, delay, drawData) {
       for (let s=0; s<slowTeams.length; s++) {
         if (drawData.cancelled) { resolve(); return; }
         reel.innerHTML = `<div class="draw-slot-team slowing">${FLAGS[slowTeams[s]]||'🌍'} ${escHtml(slowTeams[s])}</div>`;
-        await sleep(160 + s*120);
+        await sleep(280 + s*180);
       }
 
       // Land!
@@ -1177,7 +1247,7 @@ function renderMain(app) {
   const lbTable = document.createElement('div');
   lbTable.className = 'leaderboard';
   const aliveArr = playerTeamCount();
-  const sortedPlayers = [0,1,2,3]
+  const sortedPlayers = Array.from({length: NUM_PLAYERS}, (_, i) => i)
     .map(i => ({i, name:state.players[i], alive:aliveArr[i]}))
     .sort((a,b) => b.alive - a.alive);
 
@@ -1258,7 +1328,7 @@ function renderAllocationTab(container) {
   const grid = document.createElement('div');
   grid.className = 'player-panels';
 
-  for (let pi=0; pi<4; pi++) {
+  for (let pi=0; pi<NUM_PLAYERS; pi++) {
     const myTeams = Object.entries(state.allocated)
       .filter(([,p]) => p===pi)
       .map(([t]) => t);
