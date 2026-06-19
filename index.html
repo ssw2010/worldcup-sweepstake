@@ -713,6 +713,41 @@
   .modal-owner-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
   .modal-status-eliminated { color: var(--red); font-weight: 600; font-size: 12px; }
   .modal-status-champion   { color: #92400e; font-weight: 700; font-size: 12px; }
+
+  /* ── SHARE ── */
+  .share-btn {
+    background: rgba(255,255,255,0.22);
+    border: 1px solid rgba(255,255,255,0.35);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 4px 9px;
+    border-radius: 20px;
+    cursor: pointer;
+    transition: background 0.15s;
+    white-space: nowrap;
+  }
+  .share-btn:hover { background: rgba(255,255,255,0.32); }
+  .share-btn:active { transform: scale(0.96); }
+
+  .share-toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: var(--ink);
+    color: #fff;
+    padding: 12px 22px;
+    border-radius: 30px;
+    font-size: 13px;
+    font-weight: 600;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+    z-index: 3000;
+    opacity: 0;
+    transition: opacity 0.25s, transform 0.25s;
+    pointer-events: none;
+  }
+  .share-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 </style>
 </head>
 <body>
@@ -1341,7 +1376,10 @@ function renderAllocationTab(container) {
     panel.innerHTML = `
       <div class="panel-header">
         <div class="panel-header-name">${escHtml(state.players[pi])}</div>
-        <div class="panel-score-badge">${aliveCount} alive</div>
+        <div class="flex-gap" style="gap:8px">
+          <button class="share-btn" onclick="shareTeams(${pi})" title="Send teams to ${escHtml(state.players[pi])}">📤 Share</button>
+          <div class="panel-score-badge">${aliveCount} alive</div>
+        </div>
       </div>
       <div class="panel-teams">
         ${myTeams.map(team => {
@@ -1362,10 +1400,15 @@ function renderAllocationTab(container) {
   }
   container.appendChild(grid);
 
-  // Re-draw button
+  // Share all + Re-draw buttons
   const redraw = document.createElement('div');
   redraw.className = 'text-center mt16';
-  redraw.innerHTML = `<button class="btn sm" onclick="if(confirm('Re-draw teams? This resets all results.')) startDrawCeremony()">🎲 Re-draw Teams</button>`;
+  redraw.innerHTML = `
+    <div class="flex-gap" style="justify-content:center">
+      <button class="btn sm gold" onclick="shareAllTeams()">📤 Share All Teams</button>
+      <button class="btn sm" onclick="if(confirm('Re-draw teams? This resets all results.')) startDrawCeremony()">🎲 Re-draw Teams</button>
+    </div>
+  `;
   container.appendChild(redraw);
 }
 
@@ -1622,6 +1665,87 @@ function confirmReset() {
     state = defaultState();
     render();
   }
+}
+
+// ═══════════════════════════════════════════════
+// SHARE
+// ═══════════════════════════════════════════════
+function buildTeamsMessage(pi) {
+  const myTeams = Object.entries(state.allocated)
+    .filter(([,p]) => p===pi)
+    .map(([t]) => t)
+    .sort((a, b) => {
+      const ga = Object.entries(GROUPS).find(([,ts]) => ts.includes(a))?.[0] || '';
+      const gb = Object.entries(GROUPS).find(([,ts]) => ts.includes(b))?.[0] || '';
+      return ga.localeCompare(gb);
+    });
+
+  const lines = myTeams.map(team => {
+    const grp = Object.entries(GROUPS).find(([,ts]) => ts.includes(team))?.[0] || '';
+    return `${FLAGS[team]||''} ${team} (Group ${grp})`;
+  });
+
+  return `🏆 2026 World Cup Sweepstake 🏆\n\nHi ${state.players[pi]}! Your teams are:\n\n${lines.join('\n')}\n\nGood luck! ⚽`;
+}
+
+async function shareTeams(pi) {
+  const text = buildTeamsMessage(pi);
+  const title = `${state.players[pi]}'s World Cup Teams`;
+
+  if (navigator.share) {
+    try {
+      await navigator.share({ title, text });
+      return;
+    } catch(e) {
+      if (e.name === 'AbortError') return; // user cancelled, do nothing
+      // fall through to clipboard fallback on other errors
+    }
+  }
+
+  // Fallback: copy to clipboard
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast(`Copied ${state.players[pi]}'s teams to clipboard!`);
+  } catch(e) {
+    // Final fallback: show in a prompt-style alert so it can be manually copied
+    alert(text);
+  }
+}
+
+async function shareAllTeams() {
+  const sections = Array.from({length: NUM_PLAYERS}, (_, pi) => buildTeamsMessage(pi));
+  const text = `🏆 2026 World Cup Sweepstake — Full Draw 🏆\n\n${sections.map(s => s.split('\n\n')[1]).join('\n\n')}\n\nGood luck everyone! ⚽`;
+
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: 'World Cup Sweepstake — Full Draw', text });
+      return;
+    } catch(e) {
+      if (e.name === 'AbortError') return;
+    }
+  }
+
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast('Copied all teams to clipboard!');
+  } catch(e) {
+    alert(text);
+  }
+}
+
+function showToast(msg) {
+  const existing = document.getElementById('share-toast');
+  if (existing) existing.remove();
+  const toast = document.createElement('div');
+  toast.id = 'share-toast';
+  toast.className = 'share-toast';
+  toast.textContent = msg;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.classList.add('show'), 10);
+  setTimeout(() => {
+    toast.classList.remove('show');
+    setTimeout(() => toast.remove(), 300);
+  }, 2400);
 }
 
 // ═══════════════════════════════════════════════
