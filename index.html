@@ -303,6 +303,36 @@
   .score-input:focus { outline: none; border-color: var(--pitch); }
   .score-sep { font-weight: 700; color: var(--muted); font-size: 13px; }
 
+  .live-score {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 18px;
+    letter-spacing: 1px;
+    color: var(--ink);
+    background: var(--gold-pale);
+    padding: 3px 10px;
+    border-radius: 6px;
+    min-width: 50px;
+    display: inline-block;
+    text-align: center;
+  }
+  .live-score-tbd {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    padding: 3px 10px;
+    min-width: 50px;
+    display: inline-block;
+    text-align: center;
+  }
+  .live-fetch-banner {
+    text-align: center;
+    font-size: 12px;
+    font-weight: 600;
+    color: rgba(255,255,255,0.7);
+    min-height: 18px;
+    margin-bottom: 10px;
+  }
+
   .owner-badge {
     font-size: 10px;
     font-weight: 700;
@@ -1450,7 +1480,15 @@ function renderAllocationTab(container) {
 }
 
 function renderGroupTab(container) {
-  container.innerHTML = `<div class="section-title" style="color:#0d1b12;border-color:var(--pitch)">Group Stage Results <span class="pill">Enter scores</span></div>`;
+  container.innerHTML = `
+    <div class="section-title" style="color:#0d1b12;border-color:var(--pitch)">
+      Group Stage Results <span class="pill">Live results</span>
+    </div>
+    <div id="live-fetch-banner" class="live-fetch-banner"></div>
+    <div class="text-center" style="margin-bottom:14px">
+      <button class="btn sm" onclick="refreshLiveScores()">🔄 Refresh results</button>
+    </div>
+  `;
 
   Object.keys(GROUPS).forEach(g => {
     const fixtures = groupFixtures(g);
@@ -1504,20 +1542,20 @@ function renderGroupTab(container) {
             <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;color:var(--muted);margin-bottom:6px">Fixtures</div>
             ${fixtures.map((f,i) => {
               const key = `${g}-${i}`;
-              const r = state.groupResults[key] || {homeGoals:'',awayGoals:''};
+              const r = state.groupResults[key];
               const hpi = state.allocated?.[f.home];
               const api = state.allocated?.[f.away];
+              const hasResult = r && r.homeGoals !== '' && r.awayGoals !== '';
+              const scoreDisplay = hasResult
+                ? `<span class="live-score">${escHtml(r.homeGoals)} – ${escHtml(r.awayGoals)}</span>`
+                : `<span class="live-score-tbd">vs</span>`;
               return `<div class="fixture-row">
                 <div class="fixture-team home">
                   <span style="font-size:10px;font-weight:700;color:${hpi!==undefined?PLAYER_DOTS[hpi]:'#ccc'}">${hpi!==undefined?state.players[hpi].split(' ')[0]:''}</span>
                   ${FLAGS[f.home]||''} ${escHtml(f.home)}
                 </div>
                 <div class="score-entry">
-                  <input type="number" min="0" max="99" class="score-input" value="${r.homeGoals}"
-                    onchange="setScore('${key}','home',this.value)" oninput="setScore('${key}','home',this.value)">
-                  <span class="score-sep">–</span>
-                  <input type="number" min="0" max="99" class="score-input" value="${r.awayGoals}"
-                    onchange="setScore('${key}','away',this.value)" oninput="setScore('${key}','away',this.value)">
+                  ${scoreDisplay}
                 </div>
                 <div class="fixture-team away">
                   ${FLAGS[f.away]||''} ${escHtml(f.away)}
@@ -1605,10 +1643,57 @@ function initKORound(key, slots) {
 // ═══════════════════════════════════════════════
 // INTERACTIONS
 // ═══════════════════════════════════════════════
-function switchTab(t) {
+async function switchTab(t) {
   state.tab = t;
   saveState();
   render();
+
+  if (t === 'group') {
+    await refreshLiveScores();
+  }
+}
+
+async function refreshLiveScores() {
+  const banner = document.getElementById('live-fetch-banner');
+  if (banner) banner.textContent = '🔄 Checking for live results…';
+
+  _currentResults = await fetchLiveResults();
+  const changed = applyLiveResultsToState();
+  saveState();
+
+  if (state.tab === 'group') {
+    render();
+    // render() rebuilds the DOM, so re-grab the banner and show a brief confirmation
+    const newBanner = document.getElementById('live-fetch-banner');
+    if (newBanner) {
+      newBanner.textContent = changed ? '✅ Results updated' : '✓ Up to date';
+      setTimeout(() => {
+        const b = document.getElementById('live-fetch-banner');
+        if (b) b.textContent = '';
+      }, 2500);
+    }
+  }
+}
+
+// Writes any live-confirmed scores into state.groupResults so the rest of the
+// app (standings, email sync, etc.) treats them exactly like manually entered ones.
+function applyLiveResultsToState() {
+  let changed = false;
+  Object.keys(GROUPS).forEach(g => {
+    groupFixtures(g).forEach((f, i) => {
+      const live = getKnownResult(f.home, f.away);
+      if (!live) return;
+      const key = `${g}-${i}`;
+      const current = state.groupResults[key];
+      const newHg = String(live.hg);
+      const newAg = String(live.ag);
+      if (!current || current.homeGoals !== newHg || current.awayGoals !== newAg) {
+        state.groupResults[key] = { homeGoals: newHg, awayGoals: newAg };
+        changed = true;
+      }
+    });
+  });
+  return changed;
 }
 
 function toggleGroup(g) {
