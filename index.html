@@ -862,6 +862,43 @@ function isValidAllocation(allocated) {
 
 function saveState() {
   localStorage.setItem('wc2026sweep', JSON.stringify(state));
+  syncToSupabase();
+}
+
+// ═══════════════════════════════════════════════
+// SUPABASE SYNC  (lets the daily-email cron read current results)
+// ═══════════════════════════════════════════════
+const SUPABASE_URL = 'https://umsbckemywbhgwkthwpd.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_AY2uV5wAtrlYPDQ0EjtmhA_rfWMT7Pf';
+
+let _syncTimer = null;
+function syncToSupabase() {
+  // Debounce: wait 1.5s after the last change before pushing, so rapid
+  // score entry doesn't fire a request per keystroke.
+  if (!state.allocated) return; // nothing to sync before a draw happens
+  clearTimeout(_syncTimer);
+  _syncTimer = setTimeout(async () => {
+    try {
+      await fetch(`${SUPABASE_URL}/rest/v1/sweepstake_state?id=eq.main`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': SUPABASE_PUBLISHABLE_KEY,
+          'Authorization': `Bearer ${SUPABASE_PUBLISHABLE_KEY}`,
+          'Prefer': 'return=minimal'
+        },
+        body: JSON.stringify({
+          players: state.players,
+          allocated: state.allocated,
+          group_results: state.groupResults,
+          updated_at: new Date().toISOString()
+        })
+      });
+    } catch(e) {
+      // Silent fail — sync is best-effort; localStorage remains the source of truth locally
+      console.warn('Supabase sync failed (app still works fine offline):', e.message);
+    }
+  }, 1500);
 }
 
 // ═══════════════════════════════════════════════
